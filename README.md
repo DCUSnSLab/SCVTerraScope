@@ -53,4 +53,5 @@ scvterrascope-monitor --checkpoint /path/to/epoch_050.pt
 
 ## 라이선스
 
+M
 MIT — `LICENSE` 참조.
