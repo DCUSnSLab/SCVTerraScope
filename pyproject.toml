@@ -47,6 +47,10 @@ dependencies = [
     # huggingface_hub 1.0+ removed cached_download; transformers 4.56
     # imports it. Pin <1.0 to keep the import chain happy.
     "huggingface_hub>=0.24,<1.0",
+    # rosbags: pure-Python ROS 2 bag reader (sqlite3/mcap). Doesn't require
+    # sourcing /opt/ros/humble — keeps SCVTerraScope venv self-contained.
+    # See docs/progress/phase2-1_rosbag_monitor.md.
+    "rosbags>=0.10",
 ]
 
 [project.optional-dependencies]

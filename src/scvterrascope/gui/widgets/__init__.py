@@ -2,15 +2,21 @@
 
 from scvterrascope.gui.widgets.control_panel import ControlPanel
 from scvterrascope.gui.widgets.file_list import FileList
+from scvterrascope.gui.widgets.folder_tab import FolderTab
 from scvterrascope.gui.widgets.image_canvas import ImageCanvas, pil_to_pixmap
+from scvterrascope.gui.widgets.image_tab import ImageTab
 from scvterrascope.gui.widgets.performance_panel import PerformancePanel
 from scvterrascope.gui.widgets.results_table import ResultsTable
+from scvterrascope.gui.widgets.ros_bag_tab import RosBagTab
 
 __all__ = [
     "ControlPanel",
     "FileList",
+    "FolderTab",
     "ImageCanvas",
+    "ImageTab",
     "PerformancePanel",
     "ResultsTable",
+    "RosBagTab",
     "pil_to_pixmap",
 ]

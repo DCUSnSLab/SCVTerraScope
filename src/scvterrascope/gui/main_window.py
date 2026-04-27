@@ -1,4 +1,30 @@
-"""SCVTerraScope main window — wires widgets, engine, and worker together."""
+"""SCVTerraScope main window — wires widgets, engine, and worker together.
+
+Layout (Phase 2):
+    ┌─ Menu: File ─────────────────────────────────────────┐
+    │ ┌ Input dock ┐ ┌─ Image canvas (central) ─┐ ┌ Perf ┐ │
+    │ │ [Image]    │ │                           │ │       │ │
+    │ │ [Folder]   │ │  PIL image + bbox overlay │ │ rolling│
+    │ │ [ROS Bag]  │ │                           │ │  + GPU │
+    │ └────────────┘ └───────────────────────────┘ └───────┘ │
+    │ ┌ Controls dock ┐                                       │
+    │ │ Engine        │                                       │
+    │ │ Preprocess    │                                       │
+    │ │ Display       │                                       │
+    │ │ Classes       │                                       │
+    │ │ Progress      │                                       │
+    │ └───────────────┘                                       │
+    │ ┌── Detections dock ───────────────────────────────────┐│
+    │ │ class | score | bbox                                 ││
+    │ └─────────────────────────────────────────────────────┘ │
+    └─────────────────────────────────────────────────────────┘
+
+The Input dock is a QTabWidget with one tab per input source. ROS Bag
+tab carries its own playback transport; switching to it does NOT
+re-route the InferenceWorker — the worker is shared across all input
+modes via `submit(paths)` (folder mode) and `submit_image(pil, tag)`
+(single image / bag mode).
+"""
 
 from __future__ import annotations
 
@@ -15,15 +41,18 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QStatusBar,
+    QTabWidget,
 )
 
 from scvterrascope.gui.config import AppConfig
 from scvterrascope.gui.widgets import (
     ControlPanel,
-    FileList,
+    FolderTab,
     ImageCanvas,
+    ImageTab,
     PerformancePanel,
     ResultsTable,
+    RosBagTab,
 )
 from scvterrascope.gui.worker import InferenceWorker
 from scvterrascope.inference import InferenceEngine, InferenceResult
@@ -31,30 +60,28 @@ from scvterrascope.labels import Taxonomy, load_taxonomy
 from scvterrascope.visualization import draw_detections, palette_for
 
 LOG = logging.getLogger(__name__)
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
 
 class MainWindow(QMainWindow):
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
         self.setWindowTitle("SCVTerraScope — Object Detection Monitor")
-        self.resize(1400, 900)
+        self.resize(1500, 950)
         self.cfg = config
 
-        # Taxonomy is needed before the control panel can list classes;
-        # if it can't load (no SCVTerraVision sibling), fall back to a
-        # numbered placeholder so the GUI still launches for layout demos.
         self.taxonomy = self._safe_load_taxonomy()
         self.palette = list(palette_for(max(16, len(self.taxonomy))))
 
         self.engine: InferenceEngine | None = None
         self.worker: InferenceWorker | None = None
 
-        # Results state — kept so the threshold slider can re-filter
-        # without re-running inference.
+        # Inference state — single slot, shared across input modes.
         self._last_image: Image.Image | None = None
         self._last_result: InferenceResult | None = None
-        self._last_image_path: Path | None = None
+        # `_last_tag` is a string identifier for the most recent submission:
+        # a Path string for image/folder mode, "bag:<topic>:<idx>" for bag
+        # mode. We compare it on inference_finished to drop stale callbacks.
+        self._last_tag: str | None = None
 
         self._build_widgets()
         self._build_menu()
@@ -75,10 +102,6 @@ class MainWindow(QMainWindow):
             return load_taxonomy(path=self.cfg.taxonomy_path)
         except FileNotFoundError as exc:
             LOG.warning("could not load taxonomy: %s", exc)
-            # The bundled YAML is the default; this branch only triggers
-            # when the user passed an explicit `taxonomy_path` that doesn't
-            # exist. Fall back to numbered placeholders so the GUI still
-            # builds for layout demos.
             from scvterrascope.labels import OperationalClass, Taxonomy
 
             return Taxonomy(
@@ -91,23 +114,36 @@ class MainWindow(QMainWindow):
         self.canvas = ImageCanvas(self)
         self.setCentralWidget(self.canvas)
 
+        # Input QTabWidget — one tab per input source. Sits in the upper
+        # left dock area.
+        self.tab_image = ImageTab(self)
+        self.tab_folder = FolderTab(self)
+        self.tab_bag = RosBagTab(self)
+
+        self.input_tabs = QTabWidget(self)
+        self.input_tabs.addTab(self.tab_image, "Image")
+        self.input_tabs.addTab(self.tab_folder, "Folder")
+        self.input_tabs.addTab(self.tab_bag, "ROS Bag")
+
+        input_dock = QDockWidget("Input", self)
+        input_dock.setWidget(self.input_tabs)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, input_dock)
+
+        # Controls dock (engine / preprocess / display / classes).
         self.controls = ControlPanel(self.taxonomy.names(), self)
-        left = QDockWidget("Controls", self)
-        left.setWidget(self.controls)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, left)
+        controls_dock = QDockWidget("Controls", self)
+        controls_dock.setWidget(self.controls)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, controls_dock)
+        # Stack vertically: Input on top, Controls below.
+        self.splitDockWidget(input_dock, controls_dock, Qt.Orientation.Vertical)
 
-        self.file_list = FileList(self)
-        files_dock = QDockWidget("Files", self)
-        files_dock.setWidget(self.file_list)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, files_dock)
-        self.tabifyDockWidget(left, files_dock)
-        left.raise_()
-
+        # Bottom: detections table.
         self.results_table = ResultsTable(self)
         bottom = QDockWidget("Detections", self)
         bottom.setWidget(self.results_table)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, bottom)
 
+        # Right: performance panel (rolling avg / GPU mem / model info).
         self.perf_panel = PerformancePanel(parent=self)
         perf_dock = QDockWidget("Performance", self)
         perf_dock.setWidget(self.perf_panel)
@@ -116,14 +152,6 @@ class MainWindow(QMainWindow):
     def _build_menu(self) -> None:
         bar = self.menuBar()
         file_menu = bar.addMenu("&File")
-
-        open_img = QAction("Open Image…", self)
-        open_img.triggered.connect(self._open_image_dialog)
-        file_menu.addAction(open_img)
-
-        open_dir = QAction("Open Folder…", self)
-        open_dir.triggered.connect(self._open_folder_dialog)
-        file_menu.addAction(open_dir)
 
         export = QAction("Export Result…", self)
         export.triggered.connect(self._export_result)
@@ -140,19 +168,26 @@ class MainWindow(QMainWindow):
         self.status_device = QLabel("device: —")
         self.status_ckpt = QLabel("ckpt: —")
         self.status_time = QLabel("infer: —")
+        self.status_source = QLabel("source: —")
         bar.addWidget(self.status_device)
+        bar.addPermanentWidget(self.status_source)
         bar.addPermanentWidget(self.status_ckpt)
         bar.addPermanentWidget(self.status_time)
 
     def _wire_signals(self) -> None:
         c = self.controls
-        c.open_image_requested.connect(self._open_image_dialog)
-        c.open_folder_requested.connect(self._open_folder_dialog)
         c.run_inference_requested.connect(self._run_current_image)
         c.display_filters_changed.connect(self._redraw_overlays)
         c.engine_config_changed.connect(self._invalidate_engine)
         c.preprocess_changed.connect(self._on_preprocess_changed)
-        self.file_list.image_selected.connect(self._on_file_selected)
+
+        # Input tabs.
+        self.tab_image.image_selected.connect(self._on_image_tab_selected)
+        self.tab_folder.image_selected.connect(self._on_image_tab_selected)
+        self.tab_bag.frame_ready.connect(self._on_bag_frame)
+        self.input_tabs.currentChanged.connect(self._on_tab_changed)
+
+        # Detection row → highlight box.
         self.results_table.row_selected.connect(self._on_row_selected)
 
     # ----------------------------------------------------------------
@@ -188,8 +223,6 @@ class MainWindow(QMainWindow):
         self.status_device.setText(f"device: {self.engine.device}")
         self.status_ckpt.setText(f"ckpt: {ckpt.name} (epoch={self.engine.epoch})")
         self.statusBar().showMessage("Ready.", 3000)
-        # Push static info into the performance panel — it stays the same
-        # across predictions, only timings/memory change per-frame.
         self.perf_panel.reset()
         self.perf_panel.set_static_info(
             device=self.engine.device,
@@ -198,7 +231,6 @@ class MainWindow(QMainWindow):
             gpu_total_mb=self.engine.gpu_total_mb,
             image_size=self.cfg.image_size,
         )
-        # (Re)build worker for the new engine.
         if self.worker is not None:
             self.worker.stop()
             self.worker.wait(2000)
@@ -206,101 +238,113 @@ class MainWindow(QMainWindow):
         self.worker.signals.finished.connect(self._on_inference_finished)
         self.worker.signals.failed.connect(self._on_inference_failed)
         self.worker.signals.progress.connect(self.controls.set_progress)
+        # Rewire the bag tab's drop-frame predicate to the new worker.
+        self.tab_bag.attach_busy_check(self.worker.is_busy)
         return True
 
     def _invalidate_engine(self) -> None:
-        # Don't reload eagerly — wait until the next Run Inference click,
-        # so a typo in the path doesn't cause a 30s GPU load every keystroke.
         if self.engine is not None:
             self.engine = None
 
     def _on_preprocess_changed(self) -> None:
-        """Pre/letterbox toggles are cheap to flip — no model reload needed."""
         if self.engine is not None and self.engine.is_loaded():
             self.engine.aspect_crop_mode = self.controls.aspect_crop_mode()
             self.engine.pad_position = self.controls.pad_position()
-            if self._last_image_path is not None:
-                self._run_current_image()
+            # Re-run inference for the most recent input so the user sees
+            # the effect immediately.
+            if self._last_image is not None:
+                self._submit_current_image(rerun=True)
 
     # ----------------------------------------------------------------
-    # File I/O
+    # Tab switching
     # ----------------------------------------------------------------
-    def _open_image_dialog(self) -> None:
-        start = str(self.cfg.samples_dir if self.cfg.samples_dir.is_dir() else Path.home())
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open image", start, "Images (*.jpg *.jpeg *.png *.bmp);;All files (*)"
-        )
-        if path:
-            self._load_single(Path(path))
+    def _on_tab_changed(self, _idx: int) -> None:
+        # Stash any in-flight inference so we don't render stale results
+        # for the new mode. The user can re-trigger from the tab.
+        self._last_tag = None
+        # When leaving the bag tab while it's playing, pause it.
+        if self.input_tabs.currentWidget() is not self.tab_bag:
+            self.tab_bag.controller.pause()
 
-    def _open_folder_dialog(self) -> None:
-        start = str(self.cfg.samples_dir if self.cfg.samples_dir.is_dir() else Path.home())
-        directory = QFileDialog.getExistingDirectory(self, "Open folder", start)
-        if directory:
-            self._load_folder(Path(directory))
-
-    def _load_single(self, path: Path) -> None:
-        self.file_list.set_paths([path])
-        self._show_image(path, run=True)
-
-    def _load_folder(self, directory: Path) -> None:
-        # Recursive walk catches CODa's `2d_rect/cam0/<SEQ>/*.jpg` layout.
-        files = sorted(
-            p
-            for p in directory.rglob("*")
-            if p.suffix.lower() in IMAGE_EXTS
-        )
-        if not files:
-            QMessageBox.information(self, "No images", f"No images under {directory}.")
-            return
-        self.file_list.set_paths(files)
-        self._show_image(files[0], run=True)
-
-    def _on_file_selected(self, path: str) -> None:
-        self._show_image(Path(path), run=True)
-
-    def _show_image(self, path: Path, *, run: bool) -> None:
+    # ----------------------------------------------------------------
+    # Image / folder tab → inference
+    # ----------------------------------------------------------------
+    def _on_image_tab_selected(self, path_str: str) -> None:
+        path = Path(path_str)
         try:
             image = Image.open(path).convert("RGB")
         except Exception as exc:
             QMessageBox.critical(self, "Open image failed", f"{path}\n{exc}")
             return
         self._last_image = image
-        self._last_image_path = path
-        self._last_result = None
         self.canvas.set_image(image)
         self.results_table.set_detections([], palette=self.palette)
+        self.status_source.setText(f"source: {path.name}")
         self.statusBar().showMessage(f"Loaded {path.name}", 3000)
-        if run:
-            self._run_current_image()
+        self._submit_current_image(tag=str(path))
 
-    # ----------------------------------------------------------------
-    # Inference
-    # ----------------------------------------------------------------
-    def _run_current_image(self) -> None:
-        if self._last_image_path is None:
+    def _submit_current_image(self, *, tag: str | None = None, rerun: bool = False) -> None:
+        """Send the current PIL frame to the worker.
+
+        Used by both image/folder tabs and the preprocess-changed re-run.
+        For bag mode, see `_on_bag_frame`.
+        """
+        if self._last_image is None:
             return
         if not self._ensure_engine():
             return
         assert self.worker is not None
-        self.worker.submit([self._last_image_path])
+        if tag is None:
+            tag = self._last_tag or "rerun"
+        self._last_tag = tag
+        self._last_result = None
+        self.worker.submit_image(self._last_image, tag)
 
-    def _on_inference_finished(self, image_path: str, result: InferenceResult) -> None:
-        # Always feed the performance panel — folder mode runs many frames
-        # and we want rolling stats even when the user has switched canvas.
+    def _run_current_image(self) -> None:
+        """Bound to the ControlPanel 'Run Inference' button."""
+        if self._last_image is None:
+            return
+        self._submit_current_image(rerun=True)
+
+    # ----------------------------------------------------------------
+    # ROS Bag → inference
+    # ----------------------------------------------------------------
+    def _on_bag_frame(self, frame: object) -> None:
+        """Handler for RosBagTab.frame_ready (BagFrame)."""
+        if not self._ensure_engine():
+            return
+        assert self.worker is not None
+        # frame.image is a PIL.Image.Image (RGB).
+        self._last_image = frame.image  # type: ignore[attr-defined]
+        tag = f"bag:{frame.topic}:{frame.idx:06d}"  # type: ignore[attr-defined]
+        self._last_tag = tag
+        self._last_result = None
+        self.canvas.set_image(self._last_image)
+        self.results_table.set_detections([], palette=self.palette)
+        self.status_source.setText(
+            f"source: bag idx={frame.idx} ts={frame.ros_time_ns}"  # type: ignore[attr-defined]
+        )
+        self.worker.submit_image(self._last_image, tag)
+
+    # ----------------------------------------------------------------
+    # Inference result handling
+    # ----------------------------------------------------------------
+    def _on_inference_finished(self, tag: str, result: InferenceResult) -> None:
+        # Always feed the perf panel — rolling stats matter even when the
+        # user has switched canvas mid-inference.
         self.perf_panel.update_from_result(result)
-        if Path(image_path) != self._last_image_path:
-            return  # user moved on; stale callback for canvas/table only
+        if tag != self._last_tag:
+            return
         self._last_result = result
         self.status_time.setText(
             f"total: {result.total_ms:.0f} ms ({result.fps:.1f} FPS)"
         )
         self._redraw_overlays()
 
-    def _on_inference_failed(self, image_path: str, message: str) -> None:
-        if Path(image_path) != self._last_image_path:
+    def _on_inference_failed(self, tag: str, message: str) -> None:
+        if tag != self._last_tag:
             return
-        QMessageBox.critical(self, "Inference failed", f"{image_path}\n{message}")
+        QMessageBox.critical(self, "Inference failed", f"{tag}\n{message}")
 
     def _redraw_overlays(self, *, highlight_index: int | None = None) -> None:
         if self._last_image is None:
@@ -309,20 +353,15 @@ class MainWindow(QMainWindow):
             self.canvas.set_image(self._last_image, fit=False)
             self.results_table.set_detections([], palette=self.palette)
             return
-        threshold = self.controls.score_threshold()
-        class_filter = self.controls.class_filter()
         rendered = draw_detections(
             self._last_image,
             self._last_result.detections,
             palette=self.palette,
-            score_threshold=threshold,
-            class_filter=class_filter,
+            score_threshold=self.controls.score_threshold(),
+            class_filter=self.controls.class_filter(),
             highlight_index=highlight_index,
         )
         self.canvas.set_image(rendered, fit=False)
-        # Table shows the unfiltered list so the user sees "what would be
-        # there at threshold=0.0" — the slider hides them in the canvas
-        # only.
         self.results_table.set_detections(
             self._last_result.detections, palette=self.palette
         )
@@ -344,7 +383,8 @@ class MainWindow(QMainWindow):
         if not out_dir:
             return
         out = Path(out_dir)
-        stem = self._last_image_path.stem if self._last_image_path else "result"
+        # Build a stem from the last tag so bag exports get unique names.
+        stem = (self._last_tag or "result").replace("/", "_").replace(":", "_")
         rendered = draw_detections(
             self._last_image,
             self._last_result.detections,
@@ -373,6 +413,7 @@ class MainWindow(QMainWindow):
     # Cleanup
     # ----------------------------------------------------------------
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self.tab_bag.close_reader()
         if self.worker is not None:
             self.worker.stop()
             self.worker.wait(2000)

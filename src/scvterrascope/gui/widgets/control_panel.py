@@ -33,8 +33,6 @@ class ControlPanel(QWidget):
     model reload.
     """
 
-    open_image_requested = pyqtSignal()
-    open_folder_requested = pyqtSignal()
     run_inference_requested = pyqtSignal()
     display_filters_changed = pyqtSignal()  # threshold / class filter
     engine_config_changed = pyqtSignal()    # checkpoint / top_k
@@ -47,7 +45,9 @@ class ControlPanel(QWidget):
 
         layout = QVBoxLayout(self)
 
-        layout.addWidget(self._build_io_box())
+        # Input controls (Open Image / Open Folder / Open Bag) live in
+        # the top-tabbed Input dock now. This panel only owns engine,
+        # preprocessing, display filters, and class toggles.
         layout.addWidget(self._build_engine_box())
         layout.addWidget(self._build_preprocess_box())
         layout.addWidget(self._build_display_box())
@@ -56,17 +56,6 @@ class ControlPanel(QWidget):
         layout.addStretch(1)
 
     # ---- builders ------------------------------------------------
-    def _build_io_box(self) -> QGroupBox:
-        box = QGroupBox("Input")
-        lay = QVBoxLayout(box)
-        btn_img = QPushButton("Open Image…")
-        btn_img.clicked.connect(self.open_image_requested.emit)
-        btn_dir = QPushButton("Open Folder…")
-        btn_dir.clicked.connect(self.open_folder_requested.emit)
-        lay.addWidget(btn_img)
-        lay.addWidget(btn_dir)
-        return box
-
     def _build_engine_box(self) -> QGroupBox:
         box = QGroupBox("Engine")
         lay = QGridLayout(box)
