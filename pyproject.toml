@@ -1,0 +1,88 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scvterrascope"
+version = "0.0.0"
+description = "GUI-based inference monitoring tool for SCVTerraVision object detection models."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Software and System Laboratory, Daegu Catholic University" },
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: POSIX :: Linux",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+
+# NOTE: PyTorch / CUDA versions are intentionally NOT pinned here.
+# They must be installed separately against the correct CUDA build.
+# Trained checkpoints (.pt) are external — point the GUI at one via the
+# `--checkpoint` flag or `configs/default.yaml`. SCVTerraScope no longer
+# requires SCVTerraVision to be installed; the model code is vendored
+# under `scvterrascope.model` (see ADR 20260426_vendor-model-code).
+dependencies = [
+    "PyQt6>=6.6",
+    "pillow>=10.0",
+    "numpy>=1.26",
+    "opencv-python>=4.9",
+    "pyyaml>=6.0",
+    # The vendored DINOv3 backbone shim hooks into HF DeformableDetr
+    # internals that changed in transformers 5.x; pin to 4.56.x to keep
+    # the architecture byte-equivalent to the trained checkpoint. See
+    # docs/decisions/20260426_vendor-model-code.md and
+    # docs/runbooks/phase1-1_launch.md §7.
+    "transformers>=4.56,<5.0",
+    # transformers 4.56 instantiates a TimmBackbone by default and fails at
+    # construction time without `timm` even though our shim replaces the
+    # backbone immediately afterward.
+    "timm>=1.0",
+    # huggingface_hub 1.0+ removed cached_download; transformers 4.56
+    # imports it. Pin <1.0 to keep the import chain happy.
+    "huggingface_hub>=0.24,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "black>=24.3",
+    "pre-commit>=3.7",
+]
+
+[project.scripts]
+scvterrascope-monitor = "scvterrascope.gui.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/marsberry/SCVTerraScope"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Ship the bundled CODa taxonomy YAML and any other in-package data.
+[tool.setuptools.package-data]
+"scvterrascope.data" = ["*.yaml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["outputs", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311"]
+extend-exclude = "/(outputs|data)/"

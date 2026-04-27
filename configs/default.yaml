@@ -1,0 +1,45 @@
+# SCVTerraScope 기본 설정
+#
+# 사용자 환경에 맞게 복사 후 수정 권장. CLI `--config` 또는 GUI 메뉴에서 다른 YAML 로드 가능.
+
+# 추론 체크포인트 — placeholder. 실 사용 시 SCVTerraVision 의 학습 산출물 경로로 교체.
+# 예: /home/soobin/development/SCVTerraVision/outputs/checkpoints/dinov3_detr_base_full/epoch_050.pt
+checkpoint_path: null
+
+# 디바이스: "auto" | "cuda" | "cuda:0" | "cpu"
+device: auto
+
+# 추론 입력 해상도 — SCVTerraVision 학습 시 사용한 값과 동일해야 함 (DINOv3 ViT-B/16 patch=16 의 배수).
+image_size: 1024
+
+# 후처리
+score_threshold: 0.30   # GUI 슬라이더 기본값. 모델 forward 는 항상 0.0 으로 받고 표시 단계에서 필터.
+top_k: 100              # post_process_object_detection 의 top_k
+
+# 클래스 라벨 — null 이면 SCVTerraScope 패키지 내 data/coda_taxonomy.yaml 사용.
+# 다른 16-class 정의를 시도하려면 이 경로를 직접 명시.
+taxonomy_path: null
+
+# 검증용 CODa 샘플 디렉토리 — TDR 의 CODa_tiny_split.zip 을 풀면 최상위가
+# 'CODa_tiny/' 라서 그쪽까지 가리킨다. 레이아웃:
+#   <samples_dir>/2d_rect/cam0/<SEQ>/2d_rect_cam0_<SEQ>_<FRAME>.png
+# (CODa DATA_REPORT 는 .jpg 라고 적었지만 실제 tiny split 은 .png)
+# 다른 split 을 쓰면 이 경로를 그에 맞게 갱신.
+samples_dir: data/coda_samples/CODa_tiny
+
+# Letterbox padding 위치.
+#  - "bottom_right": 학습 byte-equivalent (오른쪽/아래로만 padding) — 기본.
+#  - "symmetric":    위/아래 균등 padding. (실험적; 본 모델에선 정확도 하락 관찰됨)
+#  - "auto":         종횡비 OOD 면 symmetric. (비권장 — symmetric 자체가 나쁨)
+# 본 모델(CODa-only) 은 학습 시 bottom-only padding 만 본 적이 있어 'symmetric'
+# 으로 바꾸면 letterbox 상단 padding 이 OOD 신호가 되어 정확도가 떨어진다.
+# 픽셀 손실 없이 OOD 종횡비를 다루려면 아래 aspect_crop_mode=auto 와 결합.
+pad_position: bottom_right
+
+# Pre-letterbox center crop — 입력 종횡비를 학습 분포(~1.20:1) 에 맞추기 위한 crop.
+#  - "none":   crop 안 함.
+#  - "auto":   ±10% 안이면 crop 안 하고, 벗어나면 center-crop 후 letterbox (기본).
+#  - "always": 항상 target aspect 로 center-crop.
+# 1920×1080 같은 OOD 입력에서 좌우 33% 픽셀을 버리는 비용을 치르고 학습 분포로
+# 정렬. 이게 실험상 본 모델에서 동작하는 유일한 OOD 보정.
+aspect_crop_mode: auto

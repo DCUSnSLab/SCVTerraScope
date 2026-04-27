@@ -1,0 +1,67 @@
+# Byte-compiled / optimized / cached
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Virtual envs
+.venv/
+venv/
+env/
+.python-version
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Claude Code (local agent settings, transcripts)
+.claude/
+
+# Model checkpoints (consumed from sibling SCVTerraVision repo, never committed here)
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# User-generated outputs (exported visualizations, JSON predictions)
+outputs/
+!outputs/.gitkeep
+
+# Local datasets (CODa samples, cloned coda-devkit, etc.) — see docs/runbooks/data_setup.md
+data/
+!data/.gitkeep
+!data/coda_samples/.gitkeep
+!data/coda-devkit/.gitkeep
+
+# Qt
+*.pro.user
+
+# Logs
+*.log
+logs/
+
+# Environment files (secrets — incl. HF_TOKEN)
+.env
+.env.*
+!.env.example
