@@ -17,7 +17,8 @@
 | 0 | 저장소 골격 + 문서 구조 | ✅ 완료·검토대기 (2026-04-26) | [phase0.md](phase0.md) | pyproject + docs 골격 + ADR (PyQt6, editable install) |
 | 1-0 | 검증 데이터 샘플 확보 (CODa tiny) | ✅ 완료·검토대기 (2026-04-26) | [phase1-0_data_samples.md](phase1-0_data_samples.md) | 9.1GB tiny split 다운로드 + 압축 해제 완료. 22 시퀀스, 1620 cam0 PNG 프레임. 실 CODa 프레임 추론 검증 완료. |
 | 1-1 | 이미지 GUI 모니터 | ✅ 완료·검토대기 (2026-04-26) | [phase1-1_image_monitor.md](phase1-1_image_monitor.md) | PyQt6 GUI + vendored DINOv3+DETR + 19 pytest green. **HF_TOKEN 불필요** — backbone 을 from_config 로 빌드. 실 CODa 프레임 추론 OK (bollard/sign/barrier 0.86–0.93). |
-| 2 | ROS 2 스트림 모니터 | ⚪ 예정 | — | Phase 1-1 승인 후 별도 재계획 |
+| 2-1 | ROS 2 bag 모니터 | ✅ 완료·검토대기 (2026-04-27) | [phase2-1_rosbag_monitor.md](phase2-1_rosbag_monitor.md) | rosbags + Input QTabWidget + PlaybackController + drop-frame. seek 9s→73ms (130×). **autoplay frame interval 2s→254ms (8×)** — PNG roundtrip 제거 + raw/overlay set_image 통합. 45 pytest green, 3.91 FPS. |
+| 2-2 | ROS 2 라이브 토픽 (옵션) | ⚪ 예정 | — | Phase 2-1 검증 후 필요 시 |
 
 ## 갱신 규칙
 

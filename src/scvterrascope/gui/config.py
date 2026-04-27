@@ -21,6 +21,9 @@ class AppConfig:
     # "auto" crops only when the input is far from the training aspect;
     # "always" crops every input. See preprocess.maybe_center_crop.
     aspect_crop_mode: str = "auto"
+    # Letterbox padding placement: "bottom_right" (training default),
+    # "symmetric" (centered), or "auto" (auto-pick by aspect).
+    pad_position: str = "bottom_right"
 
 
 def _coerce_path(value: Any) -> Path | None:

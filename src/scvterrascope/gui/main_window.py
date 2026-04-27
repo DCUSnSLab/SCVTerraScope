@@ -310,7 +310,15 @@ class MainWindow(QMainWindow):
     # ROS Bag → inference
     # ----------------------------------------------------------------
     def _on_bag_frame(self, frame: object) -> None:
-        """Handler for RosBagTab.frame_ready (BagFrame)."""
+        """Handler for RosBagTab.frame_ready (BagFrame).
+
+        Skips the raw-image canvas update on purpose — `_redraw_overlays`
+        will set_image once when inference finishes. With autoplay running
+        at 5+ FPS the raw → overlay double-flash is wasted work (the user
+        only ever sees the overlay frame anyway), and even with the fast
+        numpy/QImage path it still doubles the GUI-thread cost per frame.
+        See bench in `docs/progress/phase2-1_rosbag_monitor.md`.
+        """
         if not self._ensure_engine():
             return
         assert self.worker is not None
@@ -319,10 +327,9 @@ class MainWindow(QMainWindow):
         tag = f"bag:{frame.topic}:{frame.idx:06d}"  # type: ignore[attr-defined]
         self._last_tag = tag
         self._last_result = None
-        self.canvas.set_image(self._last_image)
-        self.results_table.set_detections([], palette=self.palette)
+        # Show "inferring…" feedback instead of swapping to the raw image.
         self.status_source.setText(
-            f"source: bag idx={frame.idx} ts={frame.ros_time_ns}"  # type: ignore[attr-defined]
+            f"source: bag idx={frame.idx}  (inferring…)"  # type: ignore[attr-defined]
         )
         self.worker.submit_image(self._last_image, tag)
 

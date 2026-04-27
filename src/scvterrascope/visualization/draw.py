@@ -38,8 +38,19 @@ def palette_for(n: int) -> tuple[tuple[int, int, int], ...]:
     return tuple(out)
 
 
+_FONT_CACHE: ImageFont.ImageFont | None = None
+
+
 def _default_font() -> ImageFont.ImageFont:
-    """Try to locate a readable TrueType font; fall back to PIL's default."""
+    """Try to locate a readable TrueType font; fall back to PIL's default.
+
+    Cached at module level — `ImageFont.truetype` does a disk lookup +
+    parse on every call (~0.5 ms × 4 candidates), and draw_detections
+    runs once per frame in autoplay.
+    """
+    global _FONT_CACHE
+    if _FONT_CACHE is not None:
+        return _FONT_CACHE
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -48,10 +59,12 @@ def _default_font() -> ImageFont.ImageFont:
     ]
     for path in candidates:
         try:
-            return ImageFont.truetype(path, size=16)
+            _FONT_CACHE = ImageFont.truetype(path, size=16)
+            return _FONT_CACHE
         except OSError:
             continue
-    return ImageFont.load_default()
+    _FONT_CACHE = ImageFont.load_default()
+    return _FONT_CACHE
 
 
 def draw_detections(
@@ -79,7 +92,11 @@ def draw_detections(
         thicker box for the GUI's "click row → highlight box" UX.
     """
     style = style or DrawStyle()
-    canvas = image.convert("RGB").copy()
+    # Skip a wasted convert when the input is already RGB (the bag
+    # decoder always emits RGB, and so do PIL.open().convert("RGB") in
+    # the image/folder tabs). `.copy()` is still required so we don't
+    # mutate the caller's reference.
+    canvas = image.copy() if image.mode == "RGB" else image.convert("RGB")
     draw = ImageDraw.Draw(canvas)
     font = _default_font()
 

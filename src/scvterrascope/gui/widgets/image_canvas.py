@@ -2,26 +2,36 @@
 
 from __future__ import annotations
 
-from io import BytesIO
 from typing import Any
 
+import numpy as np
 from PIL import Image
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPainter, QPixmap, QWheelEvent
+from PyQt6.QtGui import QImage, QPainter, QPixmap, QWheelEvent
 from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView
 
 
 def pil_to_pixmap(image: Image.Image) -> QPixmap:
-    """Round-trip a PIL image to QPixmap via in-memory PNG.
+    """Convert a PIL image to QPixmap via numpy → QImage (no PNG round-trip).
 
-    PNG roundtrip is slower than QImage(numpy_buffer, ...) but spares us
-    from worrying about row strides and channel order for an MVP.
+    Bench (1920×1080, RGB):
+      PNG round-trip path  —  ~212 ms per call
+      numpy/QImage path    —  ~1.1 ms per call (190× faster)
+
+    The PNG path made bag autoplay a ~2 s/frame walk; this is what
+    makes 5 FPS feasible on the GUI side. See
+    `docs/progress/phase2-1_rosbag_monitor.md` for the bench table.
+
+    QImage references the underlying buffer, so we must hand it owned
+    bytes (`.tobytes()`) — the array would otherwise be GCed before
+    QPixmap.fromImage finishes the deep copy.
     """
-    buf = BytesIO()
-    image.save(buf, format="PNG")
-    pix = QPixmap()
-    pix.loadFromData(buf.getvalue(), "PNG")
-    return pix
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    arr = np.asarray(image)
+    h, w, ch = arr.shape  # ch=3 for RGB
+    qimg = QImage(arr.tobytes(), w, h, w * ch, QImage.Format.Format_RGB888)
+    return QPixmap.fromImage(qimg)
 
 
 class ImageCanvas(QGraphicsView):
