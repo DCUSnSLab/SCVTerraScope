@@ -16,7 +16,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from scvterrascope.inference.preprocess import (
     DEFAULT_TARGET_ASPECT,
@@ -63,6 +63,51 @@ class InferenceResult:
     @property
     def fps(self) -> float:
         return 1000.0 / self.total_ms if self.total_ms > 0 else 0.0
+
+
+@runtime_checkable
+class BaseInferenceEngine(Protocol):
+    """Common interface every inference backend exposes to the GUI.
+
+    Lets the MainWindow swap between DINOv3+DETR and YOLO at runtime
+    without caring about the underlying framework. Both engines must:
+      - Expose mutable `aspect_crop_mode` / `pad_position` / `top_k`
+        attributes (some may ignore them — YOLO does its own letterbox).
+      - Return InferenceResult shapes identical to this module's dataclass
+        so PerformancePanel / draw_detections work unchanged.
+      - Build a Taxonomy that `draw_detections` can index for colors —
+        YOLO uses COCO 80, DETR uses CODa 16.
+    """
+
+    checkpoint_path: Path
+    image_size: int
+    top_k: int
+    aspect_crop_mode: AspectCropMode
+    pad_position: PadPosition
+
+    def is_loaded(self) -> bool: ...
+
+    def load(self) -> None: ...
+
+    def predict(self, image: Any) -> "InferenceResult": ...
+
+    @property
+    def device(self) -> str: ...
+
+    @property
+    def device_name(self) -> str: ...
+
+    @property
+    def epoch(self) -> int: ...
+
+    @property
+    def taxonomy(self) -> Taxonomy: ...
+
+    @property
+    def param_count(self) -> int: ...
+
+    @property
+    def gpu_total_mb(self) -> float: ...
 
 
 def _resolve_device(spec: str) -> str:

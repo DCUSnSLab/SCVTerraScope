@@ -55,7 +55,12 @@ from scvterrascope.gui.widgets import (
     RosBagTab,
 )
 from scvterrascope.gui.worker import InferenceWorker
-from scvterrascope.inference import InferenceEngine, InferenceResult
+from scvterrascope.inference import (
+    BaseInferenceEngine,
+    InferenceResult,
+    build_engine,
+    family_for,
+)
 from scvterrascope.labels import Taxonomy, load_taxonomy
 from scvterrascope.visualization import draw_detections, palette_for
 
@@ -72,8 +77,12 @@ class MainWindow(QMainWindow):
         self.taxonomy = self._safe_load_taxonomy()
         self.palette = list(palette_for(max(16, len(self.taxonomy))))
 
-        self.engine: InferenceEngine | None = None
+        self.engine: BaseInferenceEngine | None = None
         self.worker: InferenceWorker | None = None
+        # `_engine_signature` lets _ensure_engine know whether the in-memory
+        # engine still matches the user's controls (model_kind + checkpoint
+        # + top_k) — switching any of them triggers a reload.
+        self._engine_signature: tuple = ()
 
         # Inference state — single slot, shared across input modes.
         self._last_image: Image.Image | None = None
@@ -93,6 +102,7 @@ class MainWindow(QMainWindow):
         self.controls.set_top_k(self.cfg.top_k)
         self.controls.set_aspect_crop_mode(self.cfg.aspect_crop_mode)
         self.controls.set_pad_position(self.cfg.pad_position)
+        self.controls.set_model_kind(self.cfg.model_kind)
 
     # ----------------------------------------------------------------
     # Construction
@@ -180,6 +190,7 @@ class MainWindow(QMainWindow):
         c.display_filters_changed.connect(self._redraw_overlays)
         c.engine_config_changed.connect(self._invalidate_engine)
         c.preprocess_changed.connect(self._on_preprocess_changed)
+        c.model_changed.connect(self._on_model_changed)
 
         # Input tabs.
         self.tab_image.image_selected.connect(self._on_image_tab_selected)
@@ -194,57 +205,87 @@ class MainWindow(QMainWindow):
     # Engine lifecycle
     # ----------------------------------------------------------------
     def _ensure_engine(self) -> bool:
+        model_kind = self.controls.model_kind()
+        family = family_for(model_kind)
         ckpt = self.controls.checkpoint_path()
-        if ckpt is None:
-            QMessageBox.warning(self, "Checkpoint", "Set a checkpoint path first.")
+
+        # DINOv3+DETR needs a user checkpoint; YOLO can fall back to the
+        # auto-downloaded Ultralytics weight matching `model_kind`.
+        if family == "dinov3_detr" and ckpt is None:
+            QMessageBox.warning(
+                self, "Checkpoint",
+                "DINOv3+DETR requires a checkpoint path (set in 'Checkpoint:').",
+            )
             return False
+
+        signature = (model_kind, str(ckpt) if ckpt else None, self.controls.top_k())
         if (
             self.engine is not None
             and self.engine.is_loaded()
-            and self.engine.checkpoint_path == ckpt
-            and self.engine.top_k == self.controls.top_k()
+            and self._engine_signature == signature
         ):
             return True
+
         try:
-            self.engine = InferenceEngine(
+            engine = build_engine(
+                model_kind,
                 checkpoint_path=ckpt,
                 device=self.cfg.device,
                 image_size=self.cfg.image_size,
                 top_k=self.controls.top_k(),
-                taxonomy=self.taxonomy,
                 aspect_crop_mode=self.controls.aspect_crop_mode(),
                 pad_position=self.controls.pad_position(),
+                taxonomy=self.taxonomy if family == "dinov3_detr" else None,
             )
-            self.statusBar().showMessage("Loading checkpoint…", 0)
-            self.engine.load()
+            self.statusBar().showMessage(f"Loading {model_kind}…", 0)
+            engine.load()
         except Exception as exc:
             QMessageBox.critical(self, "Engine load failed", str(exc))
             return False
-        self.status_device.setText(f"device: {self.engine.device}")
-        self.status_ckpt.setText(f"ckpt: {ckpt.name} (epoch={self.engine.epoch})")
+
+        self.engine = engine
+        self._engine_signature = signature
+        # Rebuild taxonomy + class-filter grid + palette for the new engine.
+        self.taxonomy = engine.taxonomy
+        self.palette = list(palette_for(max(16, len(self.taxonomy))))
+        self.controls.set_class_names(self.taxonomy.names())
+
+        self.status_device.setText(f"device: {engine.device}")
+        ckpt_label = ckpt.name if ckpt else f"{model_kind}.pt"
+        epoch_str = f" (epoch={engine.epoch})" if engine.epoch >= 0 else ""
+        self.status_ckpt.setText(f"model: {model_kind}  ckpt: {ckpt_label}{epoch_str}")
         self.statusBar().showMessage("Ready.", 3000)
         self.perf_panel.reset()
         self.perf_panel.set_static_info(
-            device=self.engine.device,
-            device_name=self.engine.device_name,
-            param_count=self.engine.param_count,
-            gpu_total_mb=self.engine.gpu_total_mb,
+            device=engine.device,
+            device_name=engine.device_name,
+            param_count=engine.param_count,
+            gpu_total_mb=engine.gpu_total_mb,
             image_size=self.cfg.image_size,
         )
         if self.worker is not None:
             self.worker.stop()
             self.worker.wait(2000)
-        self.worker = InferenceWorker(self.engine, self)
+        self.worker = InferenceWorker(engine, self)
         self.worker.signals.finished.connect(self._on_inference_finished)
         self.worker.signals.failed.connect(self._on_inference_failed)
         self.worker.signals.progress.connect(self.controls.set_progress)
-        # Rewire the bag tab's drop-frame predicate to the new worker.
         self.tab_bag.attach_busy_check(self.worker.is_busy)
         return True
 
     def _invalidate_engine(self) -> None:
         if self.engine is not None:
             self.engine = None
+        self._engine_signature = ()
+
+    def _on_model_changed(self, _model_kind: str) -> None:
+        """User picked a different backend in the Model dropdown."""
+        self._invalidate_engine()
+        # Don't eagerly reload — wait until next inference trigger so the
+        # user can also flip checkpoint/top-k before paying the load cost.
+        self.statusBar().showMessage(
+            "Model changed — will reload on next inference run.", 4000
+        )
 
     def _on_preprocess_changed(self) -> None:
         if self.engine is not None and self.engine.is_loaded():

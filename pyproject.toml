@@ -51,6 +51,10 @@ dependencies = [
     # sourcing /opt/ros/humble — keeps SCVTerraScope venv self-contained.
     # See docs/progress/phase2-1_rosbag_monitor.md.
     "rosbags>=0.10",
+    # ultralytics: YOLO11/YOLO12 inference. Used as an alternative engine
+    # alongside the SCVTerraVision DINOv3+DETR — see docs/progress/phase2-2.
+    # Pulls torch+torchvision but those are already pinned via the DETR path.
+    "ultralytics>=8.3",
 ]
 
 [project.optional-dependencies]

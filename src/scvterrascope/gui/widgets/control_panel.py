@@ -37,6 +37,7 @@ class ControlPanel(QWidget):
     display_filters_changed = pyqtSignal()  # threshold / class filter
     engine_config_changed = pyqtSignal()    # checkpoint / top_k
     preprocess_changed = pyqtSignal()       # aspect-crop mode flipped
+    model_changed = pyqtSignal(str)         # new model_kind selected
 
     def __init__(self, class_names: Sequence[str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -57,30 +58,51 @@ class ControlPanel(QWidget):
 
     # ---- builders ------------------------------------------------
     def _build_engine_box(self) -> QGroupBox:
+        from scvterrascope.inference import model_choices
+
         box = QGroupBox("Engine")
         lay = QGridLayout(box)
-        lay.addWidget(QLabel("Checkpoint:"), 0, 0)
+
+        lay.addWidget(QLabel("Model:"), 0, 0)
+        self.model_combo = QComboBox()
+        for key, label in model_choices():
+            self.model_combo.addItem(label, key)
+        self.model_combo.setToolTip(
+            "Inference backend.\n"
+            "  DINOv3+DETR: SCVTerraVision-trained, 16 CODa classes.\n"
+            "  YOLO11/12:   Ultralytics pretrained, 80 COCO classes.\n"
+            "Switching reloads the model — first YOLO use auto-downloads weights."
+        )
+        self.model_combo.currentIndexChanged.connect(self._on_model_combo_changed)
+        lay.addWidget(self.model_combo, 0, 1)
+
+        lay.addWidget(QLabel("Checkpoint:"), 1, 0)
         self.ckpt_edit = QLineEdit()
-        self.ckpt_edit.setPlaceholderText("path/to/epoch_050.pt")
+        self.ckpt_edit.setPlaceholderText("DINOv3+DETR: path/to/epoch_050.pt    YOLO: optional override")
         self.ckpt_edit.editingFinished.connect(self.engine_config_changed.emit)
         browse = QPushButton("Browse")
         browse.clicked.connect(self._browse_ckpt)
         row = QHBoxLayout()
         row.addWidget(self.ckpt_edit, 1)
         row.addWidget(browse)
-        lay.addLayout(row, 0, 1)
+        lay.addLayout(row, 1, 1)
 
-        lay.addWidget(QLabel("Top-K:"), 1, 0)
+        lay.addWidget(QLabel("Top-K:"), 2, 0)
         self.topk_spin = QSpinBox()
         self.topk_spin.setRange(10, 300)
         self.topk_spin.setValue(100)
         self.topk_spin.valueChanged.connect(self.engine_config_changed.emit)
-        lay.addWidget(self.topk_spin, 1, 1)
+        lay.addWidget(self.topk_spin, 2, 1)
 
         run_btn = QPushButton("Run Inference")
         run_btn.clicked.connect(self.run_inference_requested.emit)
-        lay.addWidget(run_btn, 2, 0, 1, 2)
+        lay.addWidget(run_btn, 3, 0, 1, 2)
         return box
+
+    def _on_model_combo_changed(self, _idx: int) -> None:
+        kind = self.model_combo.currentData()
+        if kind:
+            self.model_changed.emit(kind)
 
     def _build_preprocess_box(self) -> QGroupBox:
         box = QGroupBox("Preprocess")
@@ -135,16 +157,39 @@ class ControlPanel(QWidget):
         return box
 
     def _build_class_box(self) -> QGroupBox:
+        from PyQt6.QtWidgets import QScrollArea
+
         box = QGroupBox("Classes (uncheck to hide)")
-        grid = QGridLayout(box)
+        outer = QVBoxLayout(box)
+        self._class_box_inner = QWidget()
+        self._class_grid = QGridLayout(self._class_box_inner)
+        self._populate_class_grid()
+        # 80 COCO classes is too tall for the dock — wrap in a scroll area.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self._class_box_inner)
+        scroll.setFixedHeight(220)
+        outer.addWidget(scroll)
+        return box
+
+    def _populate_class_grid(self) -> None:
+        # Clear any prior checkboxes (during set_class_names rebuild).
+        for cb in self._class_checkboxes:
+            cb.setParent(None)
+            cb.deleteLater()
+        self._class_checkboxes = []
         cols = 2
         for idx, name in enumerate(self._class_names):
             cb = QCheckBox(name)
             cb.setChecked(True)
             cb.stateChanged.connect(self.display_filters_changed.emit)
             self._class_checkboxes.append(cb)
-            grid.addWidget(cb, idx // cols, idx % cols)
-        return box
+            self._class_grid.addWidget(cb, idx // cols, idx % cols)
+
+    def set_class_names(self, names: Sequence[str]) -> None:
+        """Rebuild the class-filter grid (called when the engine changes)."""
+        self._class_names = list(names)
+        self._populate_class_grid()
 
     def _build_progress_box(self) -> QGroupBox:
         box = QGroupBox("Progress")
@@ -196,6 +241,18 @@ class ControlPanel(QWidget):
         for i in range(self.pad_combo.count()):
             if self.pad_combo.itemData(i) == mode:
                 self.pad_combo.setCurrentIndex(i)
+                return
+
+    def model_kind(self) -> str:
+        return self.model_combo.currentData()
+
+    def set_model_kind(self, kind: str) -> None:
+        for i in range(self.model_combo.count()):
+            if self.model_combo.itemData(i) == kind:
+                # Block signals so programmatic init doesn't fire model_changed.
+                self.model_combo.blockSignals(True)
+                self.model_combo.setCurrentIndex(i)
+                self.model_combo.blockSignals(False)
                 return
 
     def set_progress(self, current: int, total: int) -> None:

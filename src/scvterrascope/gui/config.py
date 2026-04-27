@@ -24,6 +24,10 @@ class AppConfig:
     # Letterbox padding placement: "bottom_right" (training default),
     # "symmetric" (centered), or "auto" (auto-pick by aspect).
     pad_position: str = "bottom_right"
+    # Inference backend. See scvterrascope.inference.factory.MODEL_REGISTRY:
+    # "dinov3_detr" | "yolo12n" | "yolo12s" | "yolo12m" | "yolo12l" |
+    # "yolo12x" | "yolo11n" | "yolo11x".
+    model_kind: str = "dinov3_detr"
 
 
 def _coerce_path(value: Any) -> Path | None:
@@ -57,4 +61,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     pad = raw.get("pad_position")
     if pad in ("bottom_right", "symmetric", "auto"):
         cfg.pad_position = pad
+    model = raw.get("model_kind")
+    if isinstance(model, str) and model:
+        cfg.model_kind = model
     return cfg
